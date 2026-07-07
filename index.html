@@ -1,0 +1,104 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>额度与消耗</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#6b7280;--card:#f6f7f9;--bar:#e5e7eb;--grid:#e9eaee;--s1:#2a78d6;--s2:#1baf7a}
+@media(prefers-color-scheme:dark){:root{--bg:#111315;--fg:#e7e9ec;--muted:#9aa1ab;--card:#1c1f23;--bar:#2c3138;--grid:#262b31;--s1:#3987e5;--s2:#199e70}}
+body{margin:0;padding:24px;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:860px;margin-inline:auto}
+h1{font-size:18px;margin:0 0 4px}h2{font-size:14px;color:var(--muted);font-weight:600;margin:26px 0 10px}
+.sub{color:var(--muted);font-size:12px}
+.card{background:var(--card);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.email{font-weight:600;margin-bottom:8px;display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
+.rank{color:var(--muted);font-size:12px;font-weight:400}
+.row{display:flex;align-items:center;gap:10px;margin:6px 0}
+.lbl{width:76px;color:var(--muted);font-size:12px;flex:none}
+.track{flex:1;height:10px;background:var(--bar);border-radius:5px;overflow:hidden}
+.fill{height:100%;border-radius:5px;background:#22c55e}.fill.warn{background:#f59e0b}.fill.crit{background:#ef4444}
+.pct{width:44px;text-align:right;font-variant-numeric:tabular-nums;font-size:13px;flex:none}
+.reset{width:120px;color:var(--muted);font-size:11px;text-align:right;flex:none}
+.err{color:#ef4444;font-size:13px}.na{color:var(--muted);font-size:12px}
+.tiles{display:flex;gap:12px;flex-wrap:wrap}
+.tile{background:var(--card);border-radius:12px;padding:14px 18px;flex:1;min-width:150px}
+.tile .v{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+.tile .k{color:var(--muted);font-size:12px}
+#chart{background:var(--card);border-radius:12px;padding:16px}
+.legend{display:flex;gap:16px;font-size:12px;color:var(--muted);margin-bottom:8px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+#tip{position:fixed;pointer-events:none;background:var(--fg);color:var(--bg);font-size:12px;padding:6px 9px;border-radius:6px;display:none;z-index:9;white-space:nowrap}
+#pat{max-width:520px;margin:60px auto;text-align:center}
+#pat input{width:100%;padding:10px;border-radius:8px;border:1px solid var(--bar);background:var(--card);color:var(--fg);margin:12px 0}
+#pat button{padding:10px 22px;border-radius:8px;border:0;background:var(--s1);color:#fff;font-weight:600;cursor:pointer}
+.foot{color:var(--muted);font-size:11px;margin-top:18px}
+</style></head><body>
+<div id="app">加载中…</div><div id="tip"></div>
+<script>
+const REPO='lingrei/claude-quota-sync';
+function cd(iso){if(!iso)return'';const ms=Date.parse(iso)-Date.now();if(ms<=0)return'已重置';
+const h=Math.floor(ms/3600000),m=Math.floor(ms%3600000/60000),d=Math.floor(h/24);
+return(d>0?d+'天':'')+(h%24)+'h'+(d>0?'':m+'m')+'后重置'}
+function fmtTok(n){if(n>=1e9)return(n/1e9).toFixed(2)+'B';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(0)+'k';return String(n)}
+function bar(lbl,w){if(!w)return'<div class="row"><div class="lbl">'+lbl+'</div><div class="na">此计划无该维度</div></div>';
+const c=w.pct>=90?'crit':w.pct>=70?'warn':'';
+return'<div class="row"><div class="lbl">'+lbl+'</div><div class="track"><div class="fill '+c+'" style="width:'+Math.min(100,w.pct)+'%"></div></div><div class="pct">'+Math.round(w.pct)+'%</div><div class="reset">'+cd(w.resetsAt)+'</div></div>'}
+function quotaCards(rows,dims){return rows.map(function(a,i){
+if(!a.ok)return'<div class="card"><div class="email">'+a.email+'</div><div class="err">'+(a.error||'读取失败')+'</div></div>';
+var stale=a.asOf?'<span class="rank">读数于 '+new Date(a.asOf).toLocaleString()+'</span>':(i===0?'<span class="rank">👉 优先用这个</span>':'<span class="rank">#'+(i+1)+'</span>');
+return'<div class="card"><div class="email">'+a.email+stale+'</div>'+dims.map(function(d){return bar(d[0],a[d[1]])}).join('')+'</div>'}).join('')}
+function mergeQuota(lives,key){const by={};for(const doc of lives){for(const r of (doc[key]||[])){
+const cur=by[r.email];if(!cur||Date.parse(doc.generatedAt||0)>cur._g){by[r.email]=Object.assign({_g:Date.parse(doc.generatedAt||0)},r)}}}
+const rows=Object.values(by);rows.sort((a,b)=>{const m=r=>r.ok?Math.max(r.fiveH?r.fiveH.pct:0,r.week?r.week.pct:0):999;return m(a)-m(b)});return rows}
+function mergeConsume(docs){const days={};let tot={claude:0,codex:0};
+for(const doc of docs){for(const prov of['claude','codex']){for(const em in (doc[prov]||{})){for(const d in doc[prov][em]){
+const t=doc[prov][em][d];days[d]=days[d]||{claude:0,codex:0};days[d][prov]+=t;tot[prov]+=t}}}}
+return{days,tot}}
+function chart(days){const keys=Object.keys(days).sort();const last=keys.slice(-30);
+const max=Math.max(1,...last.map(d=>days[d].claude+days[d].codex));
+const W=Math.max(320,Math.min(800,last.length*26)),H=180,P=8;
+const bw=Math.max(6,Math.floor(W/last.length)-4);
+let s='<svg viewBox="0 0 '+(W+46)+' '+(H+34)+'" style="width:100%;height:auto">';
+for(let g=0;g<=3;g++){const y=P+(H-P)*g/3;s+='<line x1="42" x2="'+(W+44)+'" y1="'+y+'" y2="'+y+'" stroke="var(--grid)"/>'
++'<text x="38" y="'+(y+4)+'" text-anchor="end" font-size="10" fill="var(--muted)">'+fmtTok(Math.round(max*(1-g/3)))+'</text>'}
+last.forEach(function(d,i){const v=days[d];const x=44+i*(bw+4);
+const hc=Math.round((H-P)*v.claude/max),ho=Math.round((H-P)*v.codex/max);
+const yc=H-hc,yo=yc-2-ho;
+s+='<g class="db" data-d="'+d+'" data-c="'+v.claude+'" data-o="'+v.codex+'">';
+if(hc>0)s+='<rect x="'+x+'" y="'+yc+'" width="'+bw+'" height="'+hc+'" rx="2" fill="var(--s1)"/>';
+if(ho>0)s+='<rect x="'+x+'" y="'+Math.max(P,yo)+'" width="'+bw+'" height="'+ho+'" rx="2" fill="var(--s2)"/>';
+s+='<rect x="'+(x-2)+'" y="0" width="'+(bw+4)+'" height="'+(H+20)+'" fill="transparent"/></g>';
+if(i%Math.ceil(last.length/8)===0)s+='<text x="'+(x+bw/2)+'" y="'+(H+16)+'" text-anchor="middle" font-size="9" fill="var(--muted)">'+d.slice(5)+'</text>'});
+s+='</svg>';return s}
+function render(lives,consumes){const q=mergeQuota(lives,'claude'),o=mergeQuota(lives,'codex');
+const c=mergeConsume(consumes);const keys=Object.keys(c.days).sort();
+const today=c.days[new Date().toLocaleDateString('sv')]||{claude:0,codex:0};
+document.getElementById('app').innerHTML=
+'<h1>额度与消耗</h1><div class="sub">'+lives.map(l=>l.host+'（'+new Date(l.generatedAt).toLocaleString()+'）').join(' · ')+'</div>'
++'<h2>Claude 账号额度（官方端点）</h2>'+quotaCards(q,[['5小时窗','fiveH'],['周窗(全模型)','week'],['Fable 周额','fable']])
++'<h2>Codex 账号额度（rollout 官方 rate_limits，新鲜度=该号最近一次使用）</h2>'+quotaCards(o,[['5小时窗','fiveH'],['周窗','week']])
++'<h2>统一 token 消耗（全部账号相加）</h2>'
++'<div class="tiles"><div class="tile"><div class="v">'+fmtTok(c.tot.claude+c.tot.codex)+'</div><div class="k">累计总消耗（记录期内）</div></div>'
++'<div class="tile"><div class="v">'+fmtTok(today.claude+today.codex)+'</div><div class="k">今日</div></div>'
++'<div class="tile"><div class="v">'+fmtTok(c.tot.claude)+'</div><div class="k">Claude 累计</div></div>'
++'<div class="tile"><div class="v">'+fmtTok(c.tot.codex)+'</div><div class="k">Codex 累计</div></div></div>'
++'<h2>每日消耗（近 30 天）</h2><div id="chart"><div class="legend"><span><span class="sw" style="background:var(--s1)"></span>Claude</span><span><span class="sw" style="background:var(--s2)"></span>Codex</span></div>'+chart(c.days)+'</div>'
++'<div class="foot">口径：不含缓存读（claude = in+out+cacheWrite；codex = 非缓存 in + out）。消耗史来自各机本地转录、经私仓跨机合并；额度百分比为官方读数。60 秒自刷新。</div>';
+document.querySelectorAll('.db').forEach(function(g){g.addEventListener('mousemove',function(ev){const t=document.getElementById('tip');
+t.style.display='block';t.style.left=(ev.clientX+12)+'px';t.style.top=(ev.clientY-10)+'px';
+t.textContent=g.dataset.d+'：Claude '+fmtTok(+g.dataset.c)+' + Codex '+fmtTok(+g.dataset.o)+' = '+fmtTok(+g.dataset.c + +g.dataset.o)});
+g.addEventListener('mouseleave',function(){document.getElementById('tip').style.display='none'})})}
+async function ghGet(pat,p){const r=await fetch('https://api.github.com/repos/'+REPO+'/contents/'+p,
+{headers:{Authorization:'Bearer '+pat,Accept:'application/vnd.github+json'},cache:'no-store'});
+if(r.status===401||r.status===403)throw new Error('PAT 无效或无权限');if(!r.ok)throw new Error('GitHub API '+r.status);return r.json()}
+function b64(s){return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\n/g,'')),c=>c.charCodeAt(0))))}
+async function githubMode(){let pat=localStorage.getItem('qb_pat');
+if(!pat){document.getElementById('app').innerHTML='<div id="pat"><h1>额度面板</h1><p class="sub">首次使用：粘贴一个只读 PAT（fine-grained，仅授 '+REPO+' 的 Contents:Read）。只存本设备 localStorage。</p><input id="pi" type="password" placeholder="github_pat_…"><br><button onclick="localStorage.setItem(\'qb_pat\',document.getElementById(\'pi\').value.trim());location.reload()">保存并加载</button></div>';return null}
+try{const ls=await ghGet(pat,'');const lives=[],consumes=[];
+for(const f of ls){if(/^live-.*\.json$/.test(f.name))lives.push(b64((await ghGet(pat,f.name)).content));
+else if(/^consume-.*\.json$/.test(f.name))consumes.push(b64((await ghGet(pat,f.name)).content))}
+return{lives,consumes}}catch(e){if(String(e).includes('PAT')){localStorage.removeItem('qb_pat');location.reload();return null}
+document.getElementById('app').innerHTML='<div class="err">加载失败：'+e+'</div>';return null}}
+async function load(){let data=null;
+try{const r=await fetch('/data',{cache:'no-store'});if(r.ok&&(r.headers.get('content-type')||'').includes('json'))data=await r.json()}catch(e){}
+if(!data)data=await githubMode();
+if(data)render(data.lives,data.consumes)}
+load();setInterval(load,60000);
+</script></body></html>
