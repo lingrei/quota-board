@@ -22,9 +22,13 @@ h1{font-size:18px;margin:0 0 4px}h2{font-size:14px;color:var(--muted);font-weigh
 .tile .v{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
 .tile .k{color:var(--muted);font-size:12px}
 #chart{background:var(--card);border-radius:12px;padding:16px}
-.legend{display:flex;gap:16px;font-size:12px;color:var(--muted);margin-bottom:8px}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-bottom:8px;flex-wrap:wrap}
+.ctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px}
+.ctl button{padding:5px 12px;border-radius:7px;border:1px solid var(--bar);background:var(--card);color:var(--fg);cursor:pointer;font-size:12px}
+.ctl button.on{background:var(--s1);border-color:var(--s1);color:#fff}
+.ctl input[type=date]{padding:4px 8px;border-radius:7px;border:1px solid var(--bar);background:var(--card);color:var(--fg);font-size:12px}
 .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
-#tip{position:fixed;pointer-events:none;background:var(--fg);color:var(--bg);font-size:12px;padding:6px 9px;border-radius:6px;display:none;z-index:9;white-space:nowrap}
+#tip{position:fixed;pointer-events:none;background:var(--fg);color:var(--bg);font-size:12px;padding:6px 9px;border-radius:6px;display:none;z-index:9;white-space:pre-line;text-align:left}
 #pat{max-width:520px;margin:60px auto;text-align:center}
 #pat input{width:100%;padding:10px;border-radius:8px;border:1px solid var(--bar);background:var(--card);color:var(--fg);margin:12px 0}
 #pat button{padding:10px 22px;border-radius:8px;border:0;background:var(--s1);color:#fff;font-weight:600;cursor:pointer}
@@ -37,41 +41,65 @@ function cd(iso){if(!iso)return'';const ms=Date.parse(iso)-Date.now();if(ms<=0)r
 const h=Math.floor(ms/3600000),m=Math.floor(ms%3600000/60000),d=Math.floor(h/24);
 return(d>0?d+'天':'')+(h%24)+'h'+(d>0?'':m+'m')+'后重置'}
 function fmtTok(n){if(n>=1e9)return(n/1e9).toFixed(2)+'B';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(0)+'k';return String(n)}
+var QB={r:30,from:null,to:null,md:{}};
+const BLUES=['#1e40af','#2563eb','#3b82f6','#60a5fa','#93c5fd','#bfdbfe'];
+const TEALS=['#0f766e','#14b8a6','#2dd4bf','#5eead4','#99f6e4'];
+function winLbl(w,fb){if(!w||!w.winMin)return fb;const m=w.winMin;return m===300?'5小时窗':m===10080?'周窗':m===43200?'30天窗':(m%60===0?(m/60)+'小时窗':m+'分钟窗')}
 function bar(lbl,w){if(!w)return'<div class="row"><div class="lbl">'+lbl+'</div><div class="na">此计划无该维度</div></div>';
+const idle=(!w.resetsAt&&(!w.pct));  // 官方端点：空闲窗（无进行中的块）= pct 0 且 resets_at null，非异常
 const c=w.pct>=90?'crit':w.pct>=70?'warn':'';
-return'<div class="row"><div class="lbl">'+lbl+'</div><div class="track"><div class="fill '+c+'" style="width:'+Math.min(100,w.pct)+'%"></div></div><div class="pct">'+Math.round(w.pct)+'%</div><div class="reset">'+cd(w.resetsAt)+'</div></div>'}
+const rt=idle?'<span class="na">空闲·发起即开新窗</span>':cd(w.resetsAt);
+return'<div class="row"><div class="lbl">'+winLbl(w,lbl)+'</div><div class="track"><div class="fill '+c+'" style="width:'+Math.min(100,w.pct||0)+'%"></div></div><div class="pct">'+Math.round(w.pct||0)+'%</div><div class="reset">'+rt+'</div></div>'}
 function quotaCards(rows,dims){return rows.map(function(a,i){
 if(!a.ok)return'<div class="card"><div class="email">'+a.email+'</div><div class="err">'+(a.error||'读取失败')+'</div></div>';
-var stale=a.asOf?'<span class="rank">读数于 '+new Date(a.asOf).toLocaleString()+'</span>':(i===0?'<span class="rank">👉 优先用这个</span>':'<span class="rank">#'+(i+1)+'</span>');
-return'<div class="card"><div class="email">'+a.email+stale+'</div>'+dims.map(function(d){return bar(d[0],a[d[1]])}).join('')+'</div>'}).join('')}
+var st=a.asOf&&(Date.now()-Date.parse(a.asOf)>6*3600000);
+var stale=a.asOf?'<span class="rank"'+(st?' style="color:#f59e0b"':'')+'>读数于 '+new Date(a.asOf).toLocaleString()+(st?' ⚠️陈旧快照（该号本机久未使用，百分比与重置时间非当前）':'')+'</span>':(i===0?'<span class="rank">👉 优先用这个</span>':'<span class="rank">#'+(i+1)+'</span>');
+var mism=a.idMismatch?'<div class="err">⚠️ 目录标称 '+a.idMismatch+'，但在位凭证实为 '+a.email+'——已按凭证真身显示；请在该目录重新 /login 正确账号</div>':'';
+return'<div class="card"><div class="email">'+a.email+stale+'</div>'+mism+dims.map(function(d){return bar(d[0],a[d[1]])}).join('')+'</div>'}).join('')}
 function mergeQuota(lives,key){const by={};for(const doc of lives){for(const r of (doc[key]||[])){
-const cur=by[r.email];if(!cur||Date.parse(doc.generatedAt||0)>cur._g){by[r.email]=Object.assign({_g:Date.parse(doc.generatedAt||0)},r)}}}
+const g=Date.parse(doc.generatedAt||0);const cur=by[r.email];
+// 额度是账号级：任何一台机器的有效读数都成立——ok 行永远优先于错误行（防「A 机凭证故障的新错误行」盖掉「B 机的真数据」），同级才比新鲜度
+if(!cur||(r.ok&&!cur.ok)||((!!r.ok)===(!!cur.ok)&&g>cur._g)){by[r.email]=Object.assign({_g:g,_host:doc.host},r)}}}
 const rows=Object.values(by);rows.sort((a,b)=>{const m=r=>r.ok?Math.max(r.fiveH?r.fiveH.pct:0,r.week?r.week.pct:0):999;return m(a)-m(b)});return rows}
-function mergeConsume(docs){const days={};let tot={claude:0,codex:0};
-for(const doc of docs){for(const prov of['claude','codex']){for(const em in (doc[prov]||{})){for(const d in doc[prov][em]){
-const t=doc[prov][em][d];days[d]=days[d]||{claude:0,codex:0};days[d][prov]+=t;tot[prov]+=t}}}}
-return{days,tot}}
-function chart(days){const keys=Object.keys(days).sort();const last=keys.slice(-30);
-const max=Math.max(1,...last.map(d=>days[d].claude+days[d].codex));
-const W=Math.max(320,Math.min(800,last.length*26)),H=180,P=8;
-const bw=Math.max(6,Math.floor(W/last.length)-4);
-let s='<svg viewBox="0 0 '+(W+46)+' '+(H+34)+'" style="width:100%;height:auto">';
-for(let g=0;g<=3;g++){const y=P+(H-P)*g/3;s+='<line x1="42" x2="'+(W+44)+'" y1="'+y+'" y2="'+y+'" stroke="var(--grid)"/>'
+function mName(mk){const p=mk.split(':');const n=p[1]||mk;if(n==='legacy')return(p[0]==='claude'?'Claude':'Codex')+'(旧口径机)';return n}
+function mergeConsume(docs){const days={};let tot={claude:0,codex:0};const md={};
+for(const doc of docs){
+for(const prov of['claude','codex']){for(const em in (doc[prov]||{})){for(const d in doc[prov][em]){
+const t=doc[prov][em][d];days[d]=days[d]||{claude:0,codex:0};days[d][prov]+=t;tot[prov]+=t}}}
+if(doc.byModel){for(const d in doc.byModel){const t=md[d]=md[d]||{};for(const mk in doc.byModel[d]){t[mk]=(t[mk]||0)+doc.byModel[d][mk]}}}
+else{for(const prov of['claude','codex']){for(const em in (doc[prov]||{})){for(const d in doc[prov][em]){
+const t=md[d]=md[d]||{};t[prov+':legacy']=(t[prov+':legacy']||0)+doc[prov][em][d]}}}}}
+return{days,tot,md}}
+function drawChart(){const md=QB.md;const all=Object.keys(md).sort();var from=QB.from,to=QB.to;
+if(QB.r!=='custom'){if(QB.r==='all'){from=null;to=null}else{const t=new Date();to=t.toLocaleDateString('sv');from=new Date(t.getTime()-(QB.r-1)*86400000).toLocaleDateString('sv')}}
+const keys=all.filter(function(d){return(!from||d>=from)&&(!to||d<=to)});
+const el=document.getElementById('chart');if(!el)return;
+if(!keys.length){el.innerHTML='<div class="na">该区间无数据</div>';return}
+const totals={};for(const d of keys)for(const mk in md[d])totals[mk]=(totals[mk]||0)+md[d][mk];
+const order=Object.keys(totals).sort(function(a,b){return totals[b]-totals[a]});
+const col={};var bi=0,ti=0;for(const mk of order){if(mk.indexOf('claude')===0)col[mk]=BLUES[Math.min(bi++,BLUES.length-1)];else col[mk]=TEALS[Math.min(ti++,TEALS.length-1)]}
+const max=Math.max(1,...keys.map(function(d){var s2=0;for(const mk in md[d])s2+=md[d][mk];return s2}));
+const W=Math.max(320,Math.min(800,keys.length*26)),H=180,P=8;
+const bw=Math.max(3,Math.floor(W/keys.length)-3);
+var s='<svg viewBox="0 0 '+(W+46)+' '+(H+34)+'" style="width:100%;height:auto">';
+for(var g=0;g<=3;g++){const y=P+(H-P)*g/3;s+='<line x1="42" x2="'+(W+44)+'" y1="'+y+'" y2="'+y+'" stroke="var(--grid)"/>'
 +'<text x="38" y="'+(y+4)+'" text-anchor="end" font-size="10" fill="var(--muted)">'+fmtTok(Math.round(max*(1-g/3)))+'</text>'}
-last.forEach(function(d,i){const v=days[d];const x=44+i*(bw+4);
-const hc=Math.round((H-P)*v.claude/max),ho=Math.round((H-P)*v.codex/max);
-const yc=H-hc,yo=yc-2-ho;
-s+='<g class="db" data-d="'+d+'" data-c="'+v.claude+'" data-o="'+v.codex+'">';
-if(hc>0)s+='<rect x="'+x+'" y="'+yc+'" width="'+bw+'" height="'+hc+'" rx="2" fill="var(--s1)"/>';
-if(ho>0)s+='<rect x="'+x+'" y="'+Math.max(P,yo)+'" width="'+bw+'" height="'+ho+'" rx="2" fill="var(--s2)"/>';
-s+='<rect x="'+(x-2)+'" y="0" width="'+(bw+4)+'" height="'+(H+20)+'" fill="transparent"/></g>';
-if(i%Math.ceil(last.length/8)===0)s+='<text x="'+(x+bw/2)+'" y="'+(H+16)+'" text-anchor="middle" font-size="9" fill="var(--muted)">'+d.slice(5)+'</text>'});
-s+='</svg>';return s}
+keys.forEach(function(d,i){const x=44+i*(bw+3);var y=H;var parts='';
+for(const mk of order){const v=md[d][mk]||0;if(!v)continue;const h=Math.max(1,Math.round((H-P)*v/max));y-=h;parts+='<rect x="'+x+'" y="'+Math.max(P,y)+'" width="'+bw+'" height="'+h+'" fill="'+col[mk]+'"/>';y-=1}
+s+='<g class="db" data-d="'+d+'">'+parts+'<rect x="'+(x-1.5)+'" y="0" width="'+(bw+3)+'" height="'+(H+20)+'" fill="transparent"/></g>';
+if(i%Math.ceil(keys.length/8)===0)s+='<text x="'+(x+bw/2)+'" y="'+(H+16)+'" text-anchor="middle" font-size="9" fill="var(--muted)">'+d.slice(5)+'</text>'});
+s+='</svg>';
+const lg='<div class="legend">'+order.map(function(mk){return'<span><span class="sw" style="background:'+col[mk]+'"></span>'+mName(mk)+' '+fmtTok(totals[mk])+'</span>'}).join('')+'</div>';
+el.innerHTML=lg+s;
+el.querySelectorAll('.db').forEach(function(g2){g2.addEventListener('mousemove',function(ev){const t=document.getElementById('tip');const d=g2.dataset.d;const mm=QB.md[d]||{};const ks=Object.keys(mm).sort(function(a,b){return mm[b]-mm[a]});var tt=0;for(const k of ks)tt+=mm[k];
+t.textContent=d+' 合计 '+fmtTok(tt)+'\n'+ks.slice(0,6).map(function(k){return mName(k)+' '+fmtTok(mm[k])}).join('\n');
+t.style.display='block';t.style.left=(ev.clientX+12)+'px';t.style.top=(ev.clientY-10)+'px'});
+g2.addEventListener('mouseleave',function(){document.getElementById('tip').style.display='none'})})}
 function render(lives,consumes){const q=mergeQuota(lives,'claude'),o=mergeQuota(lives,'codex');
-const c=mergeConsume(consumes);const keys=Object.keys(c.days).sort();
+const c=mergeConsume(consumes);QB.md=c.md;
 const today=c.days[new Date().toLocaleDateString('sv')]||{claude:0,codex:0};
 document.getElementById('app').innerHTML=
-'<h1>额度与消耗</h1><div class="sub">'+lives.map(l=>l.host+'（'+new Date(l.generatedAt).toLocaleString()+'）').join(' · ')+'</div>'
+'<h1>额度与消耗 <span class="rank">面板 v2.3</span></h1><div class="sub">'+lives.map(function(l){return l.host+'（'+new Date(l.generatedAt).toLocaleString()+'）'}).join(' · ')+'</div>'
 +'<h2>Claude 账号额度（官方端点）</h2>'+quotaCards(q,[['5小时窗','fiveH'],['周窗(全模型)','week'],['Fable 周额','fable']])
 +'<h2>Codex 账号额度（rollout 官方 rate_limits，新鲜度=该号最近一次使用）</h2>'+quotaCards(o,[['5小时窗','fiveH'],['周窗','week']])
 +'<h2>统一 token 消耗（全部账号相加）</h2>'
@@ -79,12 +107,16 @@ document.getElementById('app').innerHTML=
 +'<div class="tile"><div class="v">'+fmtTok(today.claude+today.codex)+'</div><div class="k">今日</div></div>'
 +'<div class="tile"><div class="v">'+fmtTok(c.tot.claude)+'</div><div class="k">Claude 累计</div></div>'
 +'<div class="tile"><div class="v">'+fmtTok(c.tot.codex)+'</div><div class="k">Codex 累计</div></div></div>'
-+'<h2>每日消耗（近 30 天）</h2><div id="chart"><div class="legend"><span><span class="sw" style="background:var(--s1)"></span>Claude</span><span><span class="sw" style="background:var(--s2)"></span>Codex</span></div>'+chart(c.days)+'</div>'
-+'<div class="foot">口径：不含缓存读（claude = in+out+cacheWrite；codex = 非缓存 in + out）。消耗史来自各机本地转录、经私仓跨机合并；额度百分比为官方读数。60 秒自刷新。</div>';
-document.querySelectorAll('.db').forEach(function(g){g.addEventListener('mousemove',function(ev){const t=document.getElementById('tip');
-t.style.display='block';t.style.left=(ev.clientX+12)+'px';t.style.top=(ev.clientY-10)+'px';
-t.textContent=g.dataset.d+'：Claude '+fmtTok(+g.dataset.c)+' + Codex '+fmtTok(+g.dataset.o)+' = '+fmtTok(+g.dataset.c + +g.dataset.o)});
-g.addEventListener('mouseleave',function(){document.getElementById('tip').style.display='none'})})}
++'<h2>每日消耗 <span class="sub">分模型堆叠 · 蓝系=Claude / 青绿系=Codex · 柱内自下而上=用量从多到少</span></h2>'
++'<div class="ctl"><button data-r="7">近7天</button><button data-r="30">近30天</button><button data-r="90">近90天</button><button data-r="all">全部</button><input type="date" id="df"><span class="sub">至</span><input type="date" id="dt"><button id="dgo">应用区间</button></div>'
++'<div id="chart"></div>'
++'<div class="foot">口径：不含缓存读（claude = in+out+cacheWrite；codex = 非缓存 in + out）。模型维度：claude 转录含型号、无 effort 字段；codex 含 model+effort。旧口径机 = 该机尚未升级到分模型采集。消耗史来自各机本地转录、经私仓跨机合并；额度百分比为官方读数。60 秒自刷新。<br>窗口机制：5 小时窗 / 周窗均为<b>滚动块</b>——从你发出的第一条消息起算固定时长，用量在窗内累加；<b>空闲时无进行中的块，故 0% 且不显示重置时间（发起新请求即开新窗）</b>，这是正常状态不是故障。</div>';
+document.querySelectorAll('.ctl button[data-r]').forEach(function(b){
+if(String(QB.r)===b.dataset.r)b.classList.add('on');
+b.addEventListener('click',function(){QB.r=(b.dataset.r==='all'?'all':+b.dataset.r);QB.from=QB.to=null;
+document.querySelectorAll('.ctl button[data-r]').forEach(function(x){x.classList.remove('on')});b.classList.add('on');drawChart()})});
+var dgo=document.getElementById('dgo');if(dgo)dgo.addEventListener('click',function(){var f=document.getElementById('df').value,t2=document.getElementById('dt').value;if(!f&&!t2)return;QB.r='custom';QB.from=f||null;QB.to=t2||null;document.querySelectorAll('.ctl button[data-r]').forEach(function(x){x.classList.remove('on')});drawChart()});
+drawChart()}
 async function ghGet(pat,p){const r=await fetch('https://api.github.com/repos/'+REPO+'/contents/'+p,
 {headers:{Authorization:'Bearer '+pat,Accept:'application/vnd.github+json'},cache:'no-store'});
 if(r.status===401||r.status===403)throw new Error('PAT 无效或无权限');if(!r.ok)throw new Error('GitHub API '+r.status);return r.json()}
