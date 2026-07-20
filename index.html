@@ -41,7 +41,7 @@ function cd(iso){if(!iso)return'';const ms=Date.parse(iso)-Date.now();if(ms<=0)r
 const h=Math.floor(ms/3600000),m=Math.floor(ms%3600000/60000),d=Math.floor(h/24);
 return(d>0?d+'天':'')+(h%24)+'h'+(d>0?'':m+'m')+'后重置'}
 function fmtTok(n){if(n>=1e9)return(n/1e9).toFixed(2)+'B';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(0)+'k';return String(n)}
-var QB={r:30,from:null,to:null,md:{}};
+var QB={r:30,from:null,to:null,days:{},md:{}};
 const BLUES=['#1e40af','#2563eb','#3b82f6','#60a5fa','#93c5fd','#bfdbfe'];
 const TEALS=['#0f766e','#14b8a6','#2dd4bf','#5eead4','#99f6e4'];
 function winLbl(w,fb){if(!w||!w.winMin)return fb;const m=w.winMin;return m===300?'5小时窗':m===10080?'周窗':m===43200?'30天窗':(m%60===0?(m/60)+'小时窗':m+'分钟窗')}
@@ -70,9 +70,19 @@ if(doc.byModel){for(const d in doc.byModel){const t=md[d]=md[d]||{};for(const mk
 else{for(const prov of['claude','codex']){for(const em in (doc[prov]||{})){for(const d in doc[prov][em]){
 const t=md[d]=md[d]||{};t[prov+':legacy']=(t[prov+':legacy']||0)+doc[prov][em][d]}}}}}
 return{days,tot,md}}
-function drawChart(){const md=QB.md;const all=Object.keys(md).sort();var from=QB.from,to=QB.to;
-if(QB.r!=='custom'){if(QB.r==='all'){from=null;to=null}else{const t=new Date();to=t.toLocaleDateString('sv');from=new Date(t.getTime()-(QB.r-1)*86400000).toLocaleDateString('sv')}}
-const keys=all.filter(function(d){return(!from||d>=from)&&(!to||d<=to)});
+function selectedRange(){const all=Array.from(new Set(Object.keys(QB.days).concat(Object.keys(QB.md)))).sort();var from=QB.from,to=QB.to,label;
+if(QB.r!=='custom'){if(QB.r==='all'){from=null;to=null;label='全部记录'}else{const t=new Date();to=t.toLocaleDateString('sv');from=new Date(t.getTime()-(QB.r-1)*86400000).toLocaleDateString('sv');label='近'+QB.r+'天'}}
+else label=from&&to?from+' 至 '+to:from?'自 '+from:to?'截至 '+to:'自定义区间';
+return{from,to,label,keys:all.filter(function(d){return(!from||d>=from)&&(!to||d<=to)})}}
+function dateSpan(a,b){if(!a||!b)return 0;const aa=a.split('-').map(Number),bb=b.split('-').map(Number);return Math.max(0,Math.round((Date.UTC(bb[0],bb[1]-1,bb[2])-Date.UTC(aa[0],aa[1]-1,aa[2]))/86400000)+1)}
+function drawSummary(rg){const totals={claude:0,codex:0};for(const d of rg.keys){const v=QB.days[d]||{};totals.claude+=v.claude||0;totals.codex+=v.codex||0}
+const first=rg.from||(rg.keys[0]||null),last=rg.to||(rg.keys[rg.keys.length-1]||null),span=dateSpan(first,last),sum=totals.claude+totals.codex;
+const el=document.getElementById('consume-summary');if(!el)return;
+el.innerHTML='<div class="tile"><div class="v">'+fmtTok(sum)+'</div><div class="k">区间总消耗（'+rg.label+'）</div></div>'
++'<div class="tile"><div class="v">'+fmtTok(span?Math.round(sum/span):0)+'</div><div class="k">日均（'+span+' 个日历日）</div></div>'
++'<div class="tile"><div class="v">'+fmtTok(totals.claude)+'</div><div class="k">Claude（'+rg.label+'）</div></div>'
++'<div class="tile"><div class="v">'+fmtTok(totals.codex)+'</div><div class="k">Codex（'+rg.label+'）</div></div>'}
+function drawChart(){const md=QB.md,rg=selectedRange(),keys=rg.keys;drawSummary(rg);
 const el=document.getElementById('chart');if(!el)return;
 if(!keys.length){el.innerHTML='<div class="na">该区间无数据</div>';return}
 const totals={};for(const d of keys)for(const mk in md[d])totals[mk]=(totals[mk]||0)+md[d][mk];
@@ -96,21 +106,17 @@ t.textContent=d+' 合计 '+fmtTok(tt)+'\n'+ks.slice(0,6).map(function(k){return 
 t.style.display='block';t.style.left=(ev.clientX+12)+'px';t.style.top=(ev.clientY-10)+'px'});
 g2.addEventListener('mouseleave',function(){document.getElementById('tip').style.display='none'})})}
 function render(lives,consumes){const q=mergeQuota(lives,'claude'),o=mergeQuota(lives,'codex');
-const c=mergeConsume(consumes);QB.md=c.md;
-const today=c.days[new Date().toLocaleDateString('sv')]||{claude:0,codex:0};
+const c=mergeConsume(consumes);QB.days=c.days;QB.md=c.md;
 document.getElementById('app').innerHTML=
-'<h1>额度与消耗 <span class="rank">面板 v2.3</span></h1><div class="sub">'+lives.map(function(l){return l.host+'（'+new Date(l.generatedAt).toLocaleString()+'）'}).join(' · ')+'</div>'
+'<h1>额度与消耗 <span class="rank">面板 v2.4</span></h1><div class="sub">'+lives.map(function(l){return l.host+'（'+new Date(l.generatedAt).toLocaleString()+'）'}).join(' · ')+'</div>'
 +'<h2>Claude 账号额度（官方端点）</h2>'+quotaCards(q,[['5小时窗','fiveH'],['周窗(全模型)','week'],['Fable 周额','fable']])
 +'<h2>Codex 账号额度（rollout 官方 rate_limits，新鲜度=该号最近一次使用）</h2>'+quotaCards(o,[['5小时窗','fiveH'],['周窗','week']])
 +'<h2>统一 token 消耗（全部账号相加）</h2>'
-+'<div class="tiles"><div class="tile"><div class="v">'+fmtTok(c.tot.claude+c.tot.codex)+'</div><div class="k">累计总消耗（记录期内）</div></div>'
-+'<div class="tile"><div class="v">'+fmtTok(today.claude+today.codex)+'</div><div class="k">今日</div></div>'
-+'<div class="tile"><div class="v">'+fmtTok(c.tot.claude)+'</div><div class="k">Claude 累计</div></div>'
-+'<div class="tile"><div class="v">'+fmtTok(c.tot.codex)+'</div><div class="k">Codex 累计</div></div></div>'
++'<div id="consume-summary" class="tiles"></div>'
 +'<h2>每日消耗 <span class="sub">分模型堆叠 · 蓝系=Claude / 青绿系=Codex · 柱内自下而上=用量从多到少</span></h2>'
-+'<div class="ctl"><button data-r="7">近7天</button><button data-r="30">近30天</button><button data-r="90">近90天</button><button data-r="all">全部</button><input type="date" id="df"><span class="sub">至</span><input type="date" id="dt"><button id="dgo">应用区间</button></div>'
++'<div class="ctl"><button data-r="7">近7天</button><button data-r="30">近30天</button><button data-r="90">近90天</button><button data-r="all">全部</button><input type="date" id="df" value="'+(QB.from||'')+'"><span class="sub">至</span><input type="date" id="dt" value="'+(QB.to||'')+'"><button id="dgo">应用区间</button></div>'
 +'<div id="chart"></div>'
-+'<div class="foot">口径：不含缓存读（claude = in+out+cacheWrite；codex = 非缓存 in + out）。模型维度：claude 转录含型号、无 effort 字段；codex 含 model+effort。旧口径机 = 该机尚未升级到分模型采集。消耗史来自各机本地转录、经私仓跨机合并；额度百分比为官方读数。60 秒自刷新。<br>窗口机制：5 小时窗 / 周窗均为<b>滚动块</b>——从你发出的第一条消息起算固定时长，用量在窗内累加；<b>空闲时无进行中的块，故 0% 且不显示重置时间（发起新请求即开新窗）</b>，这是正常状态不是故障。</div>';
++'<div class="foot">口径：不含缓存读（claude = in+out+cacheWrite；codex = 非缓存 in + out）。模型维度：claude 转录含型号、无 effort 字段；codex 含 model+effort。旧口径机 = 该机尚未升级到分模型采集。消耗史来自各机本地转录、经私仓跨机合并；额度百分比为官方读数。5 分钟自刷新（要即时值可刷新页面）。<br>窗口机制：5 小时窗 / 周窗均为<b>滚动块</b>——从你发出的第一条消息起算固定时长，用量在窗内累加；<b>空闲时无进行中的块，故 0% 且不显示重置时间（发起新请求即开新窗）</b>，这是正常状态不是故障。</div>';
 document.querySelectorAll('.ctl button[data-r]').forEach(function(b){
 if(String(QB.r)===b.dataset.r)b.classList.add('on');
 b.addEventListener('click',function(){QB.r=(b.dataset.r==='all'?'all':+b.dataset.r);QB.from=QB.to=null;
@@ -132,5 +138,5 @@ async function load(){let data=null;
 try{const r=await fetch('/data',{cache:'no-store'});if(r.ok&&(r.headers.get('content-type')||'').includes('json'))data=await r.json()}catch(e){}
 if(!data)data=await githubMode();
 if(data)render(data.lives,data.consumes)}
-load();setInterval(load,60000);
+load();setInterval(load,300000);/*2026-07-11 change2：60s→5min。开着的面板每 60s 拉一次 /data→collect() 是端点最大轮询源；拉长 5×降 QPS 防自伤限流。要即时值按 F5*/
 </script></body></html>
