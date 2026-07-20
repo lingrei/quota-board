@@ -18,9 +18,14 @@ h1{font-size:18px;margin:0 0 4px}h2{font-size:14px;color:var(--muted);font-weigh
 .reset{width:120px;color:var(--muted);font-size:11px;text-align:right;flex:none}
 .err{color:#ef4444;font-size:13px}.na{color:var(--muted);font-size:12px}
 .tiles{display:flex;gap:12px;flex-wrap:wrap}
-.tile{background:var(--card);border-radius:12px;padding:14px 18px;flex:1;min-width:150px}
+.tile{background:var(--card);border-radius:12px;padding:14px 16px;box-sizing:border-box;flex:1 1 130px;min-width:130px}
 .tile .v{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
 .tile .k{color:var(--muted);font-size:12px}
+.kindwrap{overflow-x:auto;background:var(--card);border-radius:12px;padding:6px 14px}
+.kindtable{width:100%;border-collapse:collapse;min-width:720px;font-variant-numeric:tabular-nums}
+.kindtable th,.kindtable td{padding:9px 8px;text-align:right;border-bottom:1px solid var(--grid);font-size:12px}
+.kindtable th{color:var(--muted);font-weight:500}.kindtable th:first-child,.kindtable td:first-child{text-align:left;font-weight:600}
+.kindtable tr:last-child td{border-bottom:0}.hint{color:var(--muted);font-size:10px;font-weight:400;display:block}
 #chart{background:var(--card);border-radius:12px;padding:16px}
 .legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-bottom:8px;flex-wrap:wrap}
 .ctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px}
@@ -41,9 +46,10 @@ function cd(iso){if(!iso)return'';const ms=Date.parse(iso)-Date.now();if(ms<=0)r
 const h=Math.floor(ms/3600000),m=Math.floor(ms%3600000/60000),d=Math.floor(h/24);
 return(d>0?d+'天':'')+(h%24)+'h'+(d>0?'':m+'m')+'后重置'}
 function fmtTok(n){if(n>=1e9)return(n/1e9).toFixed(2)+'B';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(0)+'k';return String(n)}
-var QB={r:30,from:null,to:null,days:{},md:{}};
+var QB={r:30,from:null,to:null,days:{},md:{},bk:{}};
 const BLUES=['#1e40af','#2563eb','#3b82f6','#60a5fa','#93c5fd','#bfdbfe'];
 const TEALS=['#0f766e','#14b8a6','#2dd4bf','#5eead4','#99f6e4'];
+const PURPLES=['#6d28d9','#7c3aed','#8b5cf6','#a78bfa','#c4b5fd'];
 function winLbl(w,fb){if(!w||!w.winMin)return fb;const m=w.winMin;return m===300?'5小时窗':m===10080?'周窗':m===43200?'30天窗':(m%60===0?(m/60)+'小时窗':m+'分钟窗')}
 function bar(lbl,w){if(!w)return'<div class="row"><div class="lbl">'+lbl+'</div><div class="na">此计划无该维度</div></div>';
 const idle=(!w.resetsAt&&(!w.pct));  // 官方端点：空闲窗（无进行中的块）= pct 0 且 resets_at null，非异常
@@ -56,38 +62,50 @@ var st=a.asOf&&(Date.now()-Date.parse(a.asOf)>6*3600000);
 var stale=a.asOf?'<span class="rank"'+(st?' style="color:#f59e0b"':'')+'>读数于 '+new Date(a.asOf).toLocaleString()+(st?' ⚠️陈旧快照（该号本机久未使用，百分比与重置时间非当前）':'')+'</span>':(i===0?'<span class="rank">👉 优先用这个</span>':'<span class="rank">#'+(i+1)+'</span>');
 var mism=a.idMismatch?'<div class="err">⚠️ 目录标称 '+a.idMismatch+'，但在位凭证实为 '+a.email+'——已按凭证真身显示；请在该目录重新 /login 正确账号</div>':'';
 return'<div class="card"><div class="email">'+a.email+stale+'</div>'+mism+dims.map(function(d){return bar(d[0],a[d[1]])}).join('')+'</div>'}).join('')}
-function mergeQuota(lives,key){const by={};for(const doc of lives){for(const r of (doc[key]||[])){
+function currentDocs(docs){const old=new Set();for(const d of docs)for(const h of(d.supersedes||[]))old.add(h);return docs.filter(function(d){return!old.has(d.host)})}
+function mergeQuota(lives,key){const by={};for(const doc of currentDocs(lives)){for(const r of (doc[key]||[])){
 const g=Date.parse(doc.generatedAt||0);const cur=by[r.email];
 // 额度是账号级：任何一台机器的有效读数都成立——ok 行永远优先于错误行（防「A 机凭证故障的新错误行」盖掉「B 机的真数据」），同级才比新鲜度
 if(!cur||(r.ok&&!cur.ok)||((!!r.ok)===(!!cur.ok)&&g>cur._g)){by[r.email]=Object.assign({_g:g,_host:doc.host},r)}}}
 const rows=Object.values(by);rows.sort((a,b)=>{const m=r=>r.ok?Math.max(r.fiveH?r.fiveH.pct:0,r.week?r.week.pct:0):999;return m(a)-m(b)});return rows}
-function mName(mk){const p=mk.split(':');const n=p[1]||mk;if(n==='legacy')return(p[0]==='claude'?'Claude':'Codex')+'(旧口径机)';return n}
-function mergeConsume(docs){const days={};let tot={claude:0,codex:0};const md={};
-for(const doc of docs){
-for(const prov of['claude','codex']){for(const em in (doc[prov]||{})){for(const d in doc[prov][em]){
-const t=doc[prov][em][d];days[d]=days[d]||{claude:0,codex:0};days[d][prov]+=t;tot[prov]+=t}}}
+function mName(mk){const p=mk.split(':');const n=p[1]||mk;if(n==='legacy')return({claude:'Claude',codex:'Codex',gemini:'Gemini'}[p[0]]||p[0])+'(旧口径机)';return n}
+function mergeConsume(docs){const provs=['claude','codex','gemini'],days={},tot={claude:0,codex:0,gemini:0},md={},bk={};
+for(const doc of currentDocs(docs)){
+const dt={};for(const prov of provs){for(const em in (doc[prov]||{})){for(const d in doc[prov][em]){
+const v=doc[prov][em][d];days[d]=days[d]||{claude:0,codex:0,gemini:0};days[d][prov]+=v;tot[prov]+=v;
+const x=dt[d]=dt[d]||{};x[prov]=(x[prov]||0)+v}}}
 if(doc.byModel){for(const d in doc.byModel){const t=md[d]=md[d]||{};for(const mk in doc.byModel[d]){t[mk]=(t[mk]||0)+doc.byModel[d][mk]}}}
-else{for(const prov of['claude','codex']){for(const em in (doc[prov]||{})){for(const d in doc[prov][em]){
-const t=md[d]=md[d]||{};t[prov+':legacy']=(t[prov+':legacy']||0)+doc[prov][em][d]}}}}}
-return{days,tot,md}}
-function selectedRange(){const all=Array.from(new Set(Object.keys(QB.days).concat(Object.keys(QB.md)))).sort();var from=QB.from,to=QB.to,label;
+else{for(const prov of provs){for(const em in (doc[prov]||{})){for(const d in doc[prov][em]){
+const t=md[d]=md[d]||{};t[prov+':legacy']=(t[prov+':legacy']||0)+doc[prov][em][d]}}}}
+const exact={};if(doc.byKind){for(const d in doc.byKind){for(const prov in doc.byKind[d]){const dst=(bk[d]=bk[d]||{})[prov]=(bk[d][prov]||{}),src=doc.byKind[d][prov]||{};
+for(const k of['input','output','thinking','cacheWrite','cacheRead','total','unclassified'])dst[k]=(dst[k]||0)+(src[k]||0);
+(exact[d]=exact[d]||{})[prov]=((exact[d]||{})[prov]||0)+(src.total||0)}}}
+for(const d in dt)for(const prov of provs){const gap=Math.max(0,(dt[d][prov]||0)-(((exact[d]||{})[prov])||0));if(gap){const z=(bk[d]=bk[d]||{})[prov]=(bk[d][prov]||{});z.unclassified=(z.unclassified||0)+gap;z.total=(z.total||0)+gap}}
+}
+return{days,tot,md,bk}}
+function selectedRange(){const all=Array.from(new Set(Object.keys(QB.days).concat(Object.keys(QB.md)).concat(Object.keys(QB.bk)))).sort();var from=QB.from,to=QB.to,label;
 if(QB.r!=='custom'){if(QB.r==='all'){from=null;to=null;label='全部记录'}else{const t=new Date();to=t.toLocaleDateString('sv');from=new Date(t.getTime()-(QB.r-1)*86400000).toLocaleDateString('sv');label='近'+QB.r+'天'}}
 else label=from&&to?from+' 至 '+to:from?'自 '+from:to?'截至 '+to:'自定义区间';
 return{from,to,label,keys:all.filter(function(d){return(!from||d>=from)&&(!to||d<=to)})}}
 function dateSpan(a,b){if(!a||!b)return 0;const aa=a.split('-').map(Number),bb=b.split('-').map(Number);return Math.max(0,Math.round((Date.UTC(bb[0],bb[1]-1,bb[2])-Date.UTC(aa[0],aa[1]-1,aa[2]))/86400000)+1)}
-function drawSummary(rg){const totals={claude:0,codex:0};for(const d of rg.keys){const v=QB.days[d]||{};totals.claude+=v.claude||0;totals.codex+=v.codex||0}
-const first=rg.from||(rg.keys[0]||null),last=rg.to||(rg.keys[rg.keys.length-1]||null),span=dateSpan(first,last),sum=totals.claude+totals.codex;
+function drawBreakdown(rg){const ps=['claude','codex','gemini'],names={claude:'Claude',codex:'Codex / GPT',gemini:'Gemini / Antigravity'},sum={};
+for(const p of ps)sum[p]={};for(const d of rg.keys)for(const p of ps){const s=(QB.bk[d]||{})[p]||{},t=sum[p];for(const k of['input','output','thinking','cacheWrite','cacheRead','unclassified','total'])t[k]=(t[k]||0)+(s[k]||0)}
+const rows=ps.map(function(p){const v=sum[p],ct=p==='claude'?'<span class="hint">思考含在输出中</span>':fmtTok(v.thinking||0);return'<tr><td>'+names[p]+'</td><td>'+fmtTok(v.input||0)+'</td><td>'+fmtTok(v.cacheWrite||0)+'</td><td>'+fmtTok(v.output||0)+'</td><td>'+ct+'</td><td>'+fmtTok(v.cacheRead||0)+'</td><td>'+fmtTok(v.unclassified||0)+'</td><td>'+fmtTok(v.total||0)+'</td></tr>'}).join('');
+const el=document.getElementById('consume-breakdown');if(el)el.innerHTML='<div class="kindwrap"><table class="kindtable"><thead><tr><th>来源</th><th>新输入</th><th>缓存写</th><th>正文输出</th><th>思考</th><th>缓存读<span class="hint">不计统一总量</span></th><th>旧机未细分</th><th>计入总量</th></tr></thead><tbody>'+rows+'</tbody></table></div>'}
+function drawSummary(rg){const totals={claude:0,codex:0,gemini:0};for(const d of rg.keys){const v=QB.days[d]||{};totals.claude+=v.claude||0;totals.codex+=v.codex||0;totals.gemini+=v.gemini||0}
+const first=rg.from||(rg.keys[0]||null),last=rg.to||(rg.keys[rg.keys.length-1]||null),span=dateSpan(first,last),sum=totals.claude+totals.codex+totals.gemini;
 const el=document.getElementById('consume-summary');if(!el)return;
 el.innerHTML='<div class="tile"><div class="v">'+fmtTok(sum)+'</div><div class="k">区间总消耗（'+rg.label+'）</div></div>'
 +'<div class="tile"><div class="v">'+fmtTok(span?Math.round(sum/span):0)+'</div><div class="k">日均（'+span+' 个日历日）</div></div>'
 +'<div class="tile"><div class="v">'+fmtTok(totals.claude)+'</div><div class="k">Claude（'+rg.label+'）</div></div>'
-+'<div class="tile"><div class="v">'+fmtTok(totals.codex)+'</div><div class="k">Codex（'+rg.label+'）</div></div>'}
++'<div class="tile"><div class="v">'+fmtTok(totals.codex)+'</div><div class="k">Codex / GPT（'+rg.label+'）</div></div>'
++'<div class="tile"><div class="v">'+fmtTok(totals.gemini)+'</div><div class="k">Gemini（'+rg.label+'）</div></div>';drawBreakdown(rg)}
 function drawChart(){const md=QB.md,rg=selectedRange(),keys=rg.keys;drawSummary(rg);
 const el=document.getElementById('chart');if(!el)return;
 if(!keys.length){el.innerHTML='<div class="na">该区间无数据</div>';return}
 const totals={};for(const d of keys)for(const mk in md[d])totals[mk]=(totals[mk]||0)+md[d][mk];
 const order=Object.keys(totals).sort(function(a,b){return totals[b]-totals[a]});
-const col={};var bi=0,ti=0;for(const mk of order){if(mk.indexOf('claude')===0)col[mk]=BLUES[Math.min(bi++,BLUES.length-1)];else col[mk]=TEALS[Math.min(ti++,TEALS.length-1)]}
+const col={};var bi=0,ti=0,pi=0;for(const mk of order){if(mk.indexOf('claude')===0)col[mk]=BLUES[Math.min(bi++,BLUES.length-1)];else if(mk.indexOf('gemini')===0)col[mk]=PURPLES[Math.min(pi++,PURPLES.length-1)];else col[mk]=TEALS[Math.min(ti++,TEALS.length-1)]}
 const max=Math.max(1,...keys.map(function(d){var s2=0;for(const mk in md[d])s2+=md[d][mk];return s2}));
 const W=Math.max(320,Math.min(800,keys.length*26)),H=180,P=8;
 const bw=Math.max(3,Math.floor(W/keys.length)-3);
@@ -106,17 +124,19 @@ t.textContent=d+' 合计 '+fmtTok(tt)+'\n'+ks.slice(0,6).map(function(k){return 
 t.style.display='block';t.style.left=(ev.clientX+12)+'px';t.style.top=(ev.clientY-10)+'px'});
 g2.addEventListener('mouseleave',function(){document.getElementById('tip').style.display='none'})})}
 function render(lives,consumes){const q=mergeQuota(lives,'claude'),o=mergeQuota(lives,'codex');
-const c=mergeConsume(consumes);QB.days=c.days;QB.md=c.md;
+const c=mergeConsume(consumes);QB.days=c.days;QB.md=c.md;QB.bk=c.bk;
 document.getElementById('app').innerHTML=
-'<h1>额度与消耗 <span class="rank">面板 v2.4</span></h1><div class="sub">'+lives.map(function(l){return l.host+'（'+new Date(l.generatedAt).toLocaleString()+'）'}).join(' · ')+'</div>'
+'<h1>额度与消耗 <span class="rank">面板 v2.5</span></h1><div class="sub">'+currentDocs(lives).map(function(l){return l.host+'（'+new Date(l.generatedAt).toLocaleString()+'）'}).join(' · ')+'</div>'
 +'<h2>Claude 账号额度（官方端点）</h2>'+quotaCards(q,[['5小时窗','fiveH'],['周窗(全模型)','week'],['Fable 周额','fable']])
 +'<h2>Codex 账号额度（rollout 官方 rate_limits，新鲜度=该号最近一次使用）</h2>'+quotaCards(o,[['5小时窗','fiveH'],['周窗','week']])
++'<h2>Gemini / Antigravity</h2><div class="card"><div class="email">本机 Antigravity CLI</div><div class="na">精确 token 消耗已接入下方统一统计；额度百分比目前只由交互式 /usage 显示，暂无稳定机器可读字段，因此不伪造额度卡。</div></div>'
 +'<h2>统一 token 消耗（全部账号相加）</h2>'
 +'<div id="consume-summary" class="tiles"></div>'
-+'<h2>每日消耗 <span class="sub">分模型堆叠 · 蓝系=Claude / 青绿系=Codex · 柱内自下而上=用量从多到少</span></h2>'
++'<h2>区间 token 构成 <span class="sub">随下方日期选择同步变化</span></h2><div id="consume-breakdown"></div>'
++'<h2>每日消耗 <span class="sub">分模型堆叠 · 蓝=Claude / 青绿=Codex / 紫=Gemini · 柱内自下而上=用量从多到少</span></h2>'
 +'<div class="ctl"><button data-r="7">近7天</button><button data-r="30">近30天</button><button data-r="90">近90天</button><button data-r="all">全部</button><input type="date" id="df" value="'+(QB.from||'')+'"><span class="sub">至</span><input type="date" id="dt" value="'+(QB.to||'')+'"><button id="dgo">应用区间</button></div>'
 +'<div id="chart"></div>'
-+'<div class="foot">口径：不含缓存读（claude = in+out+cacheWrite；codex = 非缓存 in + out）。模型维度：claude 转录含型号、无 effort 字段；codex 含 model+effort。旧口径机 = 该机尚未升级到分模型采集。消耗史来自各机本地转录、经私仓跨机合并；额度百分比为官方读数。5 分钟自刷新（要即时值可刷新页面）。<br>窗口机制：5 小时窗 / 周窗均为<b>滚动块</b>——从你发出的第一条消息起算固定时长，用量在窗内累加；<b>空闲时无进行中的块，故 0% 且不显示重置时间（发起新请求即开新窗）</b>，这是正常状态不是故障。</div>';
++'<div class="foot">统一口径：新输入 + 缓存写（仅 Claude）+ 正文输出 + 思考；缓存读单列但不计统一总量。Claude 本地 usage 没有独立思考 token，故其“输出”包含思考；Codex 与 Gemini 可精确拆分正文输出和思考。旧机未细分 = 其他电脑尚未升级到 v2.5，但其总量仍计入。消耗史来自各机本地原始事件、经私仓跨机合并；额度百分比为官方读数。5 分钟自刷新（要即时值可刷新页面）。<br>窗口机制：5 小时窗 / 周窗均为<b>滚动块</b>——从你发出的第一条消息起算固定时长，用量在窗内累加；<b>空闲时无进行中的块，故 0% 且不显示重置时间（发起新请求即开新窗）</b>，这是正常状态不是故障。</div>';
 document.querySelectorAll('.ctl button[data-r]').forEach(function(b){
 if(String(QB.r)===b.dataset.r)b.classList.add('on');
 b.addEventListener('click',function(){QB.r=(b.dataset.r==='all'?'all':+b.dataset.r);QB.from=QB.to=null;
